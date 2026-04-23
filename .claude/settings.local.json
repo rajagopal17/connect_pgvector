@@ -1,0 +1,11 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(uv pip *)",
+      "Bash(venv/Scripts/python.exe query.py)",
+      "Bash(venv/Scripts/python.exe -c \"from dotenv import load_dotenv; load_dotenv\\(\\); import skills.min_rag_connect as m; m.main\\(\\)\")",
+      "Bash(venv/Scripts/python.exe skills/min_rag_connect.py)",
+      "Bash(venv/Scripts/python.exe -c ' *)"
+    ]
+  }
+}
