@@ -7,7 +7,16 @@
       "Bash(venv/Scripts/python.exe skills/min_rag_connect.py)",
       "Bash(venv/Scripts/python.exe -c ' *)",
       "Bash(python skills/min_rag_connect.py)",
-      "Bash(python -c ' *)"
+      "Bash(python -c ' *)",
+      "Bash(python -c \"import torch; print\\('torch:', torch.__version__\\)\")",
+      "Bash(python -c \"import torchvision; print\\('torchvision:', torchvision.__version__\\)\")",
+      "Bash(pip install *)",
+      "PowerShell(pip install *)",
+      "Bash(python -c \"from flashrank import Ranker; print\\('flashrank ok'\\)\")",
+      "Bash(python -m pip show flashrank)",
+      "Bash(python -m pip index versions flashrank)",
+      "Bash(python -m pip install flashrank==0.2.10)",
+      "Bash(python -u skills/min_rag_connect.py)"
     ]
   }
 }

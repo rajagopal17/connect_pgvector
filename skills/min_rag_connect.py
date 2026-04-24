@@ -1,12 +1,15 @@
 import os
+import sys
 import time
 import psycopg2
 from typing import List
 from pgvector.psycopg2 import register_vector
 from openai import OpenAI
 from dotenv import load_dotenv
+from flashrank import Ranker, RerankRequest # pyright: ignore[reportMissingImports]
 
 load_dotenv()
+sys.stdout.reconfigure(line_buffering=True)
 
 # ----------------------------
 # CONFIG
@@ -19,10 +22,11 @@ DB_CONFIG = {
     "password": os.getenv("PG_PASSWORD"),
 }
 
-TABLE     = os.getenv("PG_TABLE")
-TOP_K     = int(os.getenv("TOP_K"))
-EMBED_MODEL = os.getenv("EMBED_MODEL")
-CHAT_MODEL  = os.getenv("CHAT_MODEL")
+TABLE        = os.getenv("PG_TABLE")
+TOP_K        = int(os.getenv("TOP_K"))
+EMBED_MODEL  = os.getenv("EMBED_MODEL")
+CHAT_MODEL   = os.getenv("CHAT_MODEL")
+RERANK_MODEL = os.getenv("RERANK_MODEL")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -45,7 +49,7 @@ def retrieve(query_vec):
     register_vector(conn)
     cur = conn.cursor()
     cur.execute("SET enable_seqscan = off;")
-    cur.execute("SET hnsw.ef_search = 100;")
+    cur.execute("SET hnsw.ef_search = 50;")
     cur.execute(f"""
         SELECT chunk_text, raw_metadata, embedding <=> %s::vector AS score
         FROM {TABLE}
@@ -56,6 +60,16 @@ def retrieve(query_vec):
     cur.close()
     conn.close()
     return results
+
+# ----------------------------
+# RERANK
+# ----------------------------
+def rerank(query: str, chunks: list) -> list:
+    ranker = Ranker(model_name=RERANK_MODEL)
+    passages = [{"id": i, "text": chunk[0], "meta": chunk[1]} for i, chunk in enumerate(chunks)]
+    request = RerankRequest(query=query, passages=passages)
+    results = ranker.rerank(request)
+    return [(r["text"], r["meta"], r["score"]) for r in results]
 
 # ----------------------------
 # PROMPT
@@ -115,27 +129,36 @@ def check_index(query_vec):
         LIMIT {TOP_K};
     """, (query_vec, query_vec))
     plan = cur.fetchall()
-    print("\nQuery plan:")
-    for row in plan:
-        print(" ", row[0])
-    cur.close()
-    conn.close()
+    #print("\nQuery plan:")
+    #for row in plan:
+    #    print(" ", row[0])
+    #cur.close()
+    #conn.close()
 
 # ----------------------------
 def main():
     question = "how is risk management done in sap trm in not more than 5 lines?"
     query_vec = get_embedding(question)
-    check_index(query_vec)
+    # check_index(query_vec)
     chunks = retrieve(query_vec)
+    chunks = rerank(question, chunks)
     prompt = build_prompt(chunks)
     answer = generate(prompt, question)
-    #print("Answer:", answer)
-    #show the retrieved chunks and their scores for debugging
+    print("\n" + "="*60, flush=True)
+    print("ANSWER", flush=True)
+    print("="*60, flush=True)
+    print(answer, flush=True)
+
+    print("\n" + "="*60, flush=True)
+    print("RERANKED CHUNKS", flush=True)
+    print("="*60, flush=True)
     for i, (text, metadata, score) in enumerate(chunks):
         safe_text = text.encode("ascii", errors="replace").decode("ascii")
-        print(f"Chunk {i+1} (score={score:.3f}):")
-        print(f"Metadata: {metadata}")
-        print(f"Text: {safe_text}\n")
+        page = metadata.get("page", "?") if isinstance(metadata, dict) else "?"
+        source = metadata.get("source", "?").split("\\")[-1] if isinstance(metadata, dict) else "?"
+        print(f"\n[{i+1}] score={score:.4f} | page={page} | {source}", flush=True)
+        print("-"*50, flush=True)
+        print(safe_text.strip(), flush=True)
 
 if __name__ == "__main__":
     main()
