@@ -12,17 +12,17 @@ load_dotenv()
 # CONFIG
 # ----------------------------
 DB_CONFIG = {
-    "host":     os.getenv("PG_HOST",     "localhost"),
-    "port":     int(os.getenv("PG_PORT", "5432")),
-    "dbname":   os.getenv("PG_DB",       "ragdb"),
-    "user":     os.getenv("PG_USER",     "postgres"),
-    "password": os.getenv("PG_PASSWORD", ""),
+    "host": os.getenv("PG_HOST", "localhost"),
+    "port": int(os.getenv("PG_PORT", "5434")),
+    "dbname":   os.getenv("PG_DB"),
+    "user":     os.getenv("PG_USER"),
+    "password": os.getenv("PG_PASSWORD"),
 }
 
-TABLE     = os.getenv("PG_TABLE", "data_embeddings")
-TOP_K     = 5
-EMBED_MODEL = "text-embedding-3-small"
-CHAT_MODEL  = "gpt-4o-mini"
+TABLE     = os.getenv("PG_TABLE")
+TOP_K     = int(os.getenv("TOP_K"))
+EMBED_MODEL = os.getenv("EMBED_MODEL")
+CHAT_MODEL  = os.getenv("CHAT_MODEL")
 
 client = OpenAI(api_key=os.getenv("OPENAI_API_KEY"))
 
@@ -39,25 +39,23 @@ def get_embedding(text: str) -> List[float]:
 # ----------------------------
 # RETRIEVE
 # ----------------------------
-def retrieve(query_vec: List[float]):
+def retrieve(query_vec):
+    
     conn = psycopg2.connect(**DB_CONFIG)
     register_vector(conn)
-
-    with conn.cursor() as cur:
-        cur.execute(
-            f"""
-            SELECT text, metadata_,
-                   1 - (embedding <=> %s::vector) AS score
-            FROM {TABLE}
-            ORDER BY embedding <=> %s::vector
-            LIMIT %s
-            """,
-            (query_vec, query_vec, TOP_K)
-        )
-        rows = cur.fetchall()
-
+    cur = conn.cursor()
+    cur.execute("SET enable_seqscan = off;")
+    cur.execute("SET hnsw.ef_search = 100;")
+    cur.execute(f"""
+        SELECT chunk_text, raw_metadata, embedding <=> %s::vector AS score
+        FROM {TABLE}
+        ORDER BY embedding <=> %s::vector
+        LIMIT {TOP_K};
+    """, (query_vec, query_vec))
+    results = cur.fetchall()
+    cur.close()
     conn.close()
-    return rows
+    return results
 
 # ----------------------------
 # PROMPT
@@ -90,18 +88,54 @@ def generate(prompt, question):
     return resp.choices[0].message.content
 
 # ----------------------------
+# INDEX CHECK
+# ----------------------------
+def check_index(query_vec):
+    conn = psycopg2.connect(**DB_CONFIG)
+    register_vector(conn)
+    cur = conn.cursor()
+    cur.execute("SET enable_seqscan = off;")
+    cur.execute("SET hnsw.ef_search = 50;")
+    # List indexes on the table
+    cur.execute(f"""
+        SELECT indexname, indexdef
+        FROM pg_indexes
+        WHERE tablename = '{TABLE}';
+    """)
+    indexes = cur.fetchall()
+    print("Indexes on table:")
+    for name, defn in indexes:
+        print(f"  {name}: {defn}")
+    # Show which index the planner uses for the vector query
+    cur.execute(f"""
+        EXPLAIN (FORMAT TEXT)
+        SELECT chunk_text, raw_metadata, embedding <=> %s::vector AS score
+        FROM {TABLE}
+        ORDER BY embedding <=> %s::vector
+        LIMIT {TOP_K};
+    """, (query_vec, query_vec))
+    plan = cur.fetchall()
+    print("\nQuery plan:")
+    for row in plan:
+        print(" ", row[0])
+    cur.close()
+    conn.close()
+
+# ----------------------------
 def main():
-    question = "What different types of depreciation methods are mentioned in the document?"
+    question = "how is risk management done in sap trm in not more than 5 lines?"
     query_vec = get_embedding(question)
+    check_index(query_vec)
     chunks = retrieve(query_vec)
     prompt = build_prompt(chunks)
-    #answer = generate(prompt, question)
+    answer = generate(prompt, question)
     #print("Answer:", answer)
     #show the retrieved chunks and their scores for debugging
     for i, (text, metadata, score) in enumerate(chunks):
+        safe_text = text.encode("ascii", errors="replace").decode("ascii")
         print(f"Chunk {i+1} (score={score:.3f}):")
         print(f"Metadata: {metadata}")
-        print(f"Text: {text}\n")
+        print(f"Text: {safe_text}\n")
 
 if __name__ == "__main__":
     main()
